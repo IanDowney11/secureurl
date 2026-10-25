@@ -1,1 +1,1 @@
-﻿{ "rewrites": [{ "source": "/((?!assets/|sw.js|manifest.json|icon.svg).*)", "destination": "/index.html" }] }
+{ "rewrites": [{ "source": "/((?!assets/|sw.js|manifest.json|icon.svg).*)", "destination": "/index.html" }] }

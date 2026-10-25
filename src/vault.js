@@ -1,4 +1,4 @@
-﻿import { getPublicKey } from 'nostr-tools/pure';
+import { getPublicKey } from 'nostr-tools/pure';
 import * as nip44 from 'nostr-tools/nip44';
 import { bytesToHex, hexToBytes } from 'nostr-tools/utils';
 

@@ -1,4 +1,4 @@
-﻿const CACHE = 'secureurl-v1';
+const CACHE = 'secureurl-v1';
 const PRECACHE = ['/', '/manifest.json', '/icon.svg'];
 
 self.addEventListener('install', (e) => {
