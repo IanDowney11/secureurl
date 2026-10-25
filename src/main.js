@@ -32,7 +32,7 @@ async function copy(text, msg = 'Copied') {
     await navigator.clipboard.writeText(text);
     toast(msg);
   } catch {
-    toast('Copy failed — long-press to copy');
+    toast('Copy failed');
   }
 }
 
@@ -197,6 +197,7 @@ function renderList(filter = '') {
       </header>
       <form id="add" class="card">
         <textarea id="urls" rows="2" placeholder="Paste one or more URLs…"></textarea>
+        <button class="ghost wide" type="button" id="paste">Paste from clipboard</button>
         <input id="note" placeholder="Note (optional)" />
         <button class="primary" type="submit">Save</button>
       </form>
@@ -210,7 +211,6 @@ function renderList(filter = '') {
             <a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.url)}</a>
             ${i.note ? `<div class="note">${esc(i.note)}</div>` : ''}
             <div class="meta">${new Date(i.added).toLocaleDateString()}
-              <button class="mini" data-copy="${i.id}">Copy</button>
               <button class="mini danger" data-del="${i.id}">Delete</button>
             </div>
           </li>`
@@ -228,6 +228,19 @@ function renderList(filter = '') {
     const s = $('#search');
     s.focus();
     s.setSelectionRange(s.value.length, s.value.length);
+  };
+  // URLs are never copied out; once pasted in, the clipboard is wiped.
+  const wipeClipboard = () => navigator.clipboard?.writeText('').catch(() => {});
+  $('#urls').addEventListener('paste', () => setTimeout(wipeClipboard, 0));
+  $('#paste').onclick = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      $('#urls').value += ($('#urls').value ? '\n' : '') + text;
+      await navigator.clipboard.writeText('');
+      toast('Pasted — clipboard cleared');
+    } catch {
+      toast('Clipboard unavailable — paste into the box instead');
+    }
   };
   $('#add').onsubmit = (e) => {
     e.preventDefault();
@@ -252,9 +265,6 @@ function renderList(filter = '') {
     renderList(filter);
     toast(`Saved ${added}`);
   };
-  app.querySelectorAll('[data-copy]').forEach(
-    (b) => (b.onclick = () => copy(vault.items.find((i) => i.id === b.dataset.copy).url))
-  );
   app.querySelectorAll('[data-del]').forEach(
     (b) =>
       (b.onclick = () => {
@@ -272,7 +282,6 @@ function renderBackup() {
     <button class="primary" id="push">Back up to Nostr now</button>
     <p class="muted" id="status"></p>
     <button class="ghost wide" id="nsecBtn">Show my nsec</button>
-    <button class="ghost wide" id="plain">Copy URLs as plain text (unencrypted)</button>
     <button class="ghost wide" id="restore">Restore from Nostr…</button>
     <button class="link" id="back">Back</button>
   `);
@@ -288,7 +297,6 @@ function renderBackup() {
     e.target.disabled = false;
   };
   $('#nsecBtn').onclick = () => renderNsec(false);
-  $('#plain').onclick = () => copy(vault.items.map((i) => i.url).join('\n'), 'URLs copied');
   $('#restore').onclick = renderRestore;
   $('#back').onclick = render;
 }
