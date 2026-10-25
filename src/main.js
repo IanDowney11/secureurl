@@ -1,5 +1,5 @@
 import './style.css';
-import { Vault, hasVault, wipe, MIN_PIN_LENGTH } from './vault.js';
+import { Vault, hasVault, MIN_PIN_LENGTH } from './vault.js';
 
 const app = document.getElementById('app');
 const IDLE_MS = 2 * 60 * 1000;
@@ -90,7 +90,7 @@ function renderSetup() {
       <button class="primary" type="submit">Create vault</button>
       <p class="error" id="err"></p>
     </form>
-    <button class="link" id="restore">Restore from backup</button>
+    <button class="link" id="restore">Restore from Nostr</button>
   `);
   $('#f').onsubmit = async (e) => {
     e.preventDefault();
@@ -101,7 +101,7 @@ function renderSetup() {
     $('#err').textContent = 'Creating…';
     vault = await Vault.create(p1);
     bumpIdle();
-    render();
+    renderNsec(true);
   };
   $('#restore').onclick = renderRestore;
 }
@@ -115,7 +115,7 @@ function renderLock() {
       <button class="primary" type="submit">Unlock</button>
       <p class="error" id="err"></p>
     </form>
-    <button class="link" id="restore">Restore from backup</button>
+    <button class="link" id="restore">Restore from Nostr</button>
   `);
   $('#f').onsubmit = async (e) => {
     e.preventDefault();
@@ -139,13 +139,13 @@ function renderLock() {
 function renderRestore() {
   const replacing = hasVault() || vault;
   shell(`
-    <h1>Restore backup</h1>
-    <p class="muted">Paste your encrypted backup message and the PIN it was made with.${
+    <h1>Restore from Nostr</h1>
+    <p class="muted">Enter your nsec and the PIN you used. The latest encrypted backup is fetched from Nostr relays.${
       replacing ? ' <strong>This replaces the data on this device.</strong>' : ''
     }</p>
     <form id="f" autocomplete="off">
-      <textarea id="msg" rows="5" placeholder="SECUREURL1.…"></textarea>
-      <input id="pin" type="password" inputmode="numeric" placeholder="Backup PIN" autocomplete="off" />
+      <input id="nsec" type="password" placeholder="nsec1…" autocomplete="off" autocapitalize="off" spellcheck="false" />
+      <input id="pin" type="password" inputmode="numeric" placeholder="PIN" autocomplete="off" />
       <button class="primary" type="submit">Restore</button>
       <p class="error" id="err"></p>
     </form>
@@ -154,17 +154,33 @@ function renderRestore() {
   $('#back').onclick = render;
   $('#f').onsubmit = async (e) => {
     e.preventDefault();
-    $('#err').textContent = 'Decrypting…';
+    $('#err').textContent = 'Contacting relays…';
     try {
-      vault = await Vault.restore($('#msg').value, $('#pin').value);
+      vault = await Vault.restoreFromNostr($('#nsec').value, $('#pin').value);
       clearFails();
       bumpIdle();
       render();
       toast(`Restored ${vault.items.length} URL${vault.items.length === 1 ? '' : 's'}`);
     } catch (err) {
-      $('#err').textContent = err.message === 'Not a SecureURL backup' ? err.message : 'Wrong PIN or damaged backup.';
+      $('#err').textContent = ['Invalid nsec', 'No backup found for this nsec'].includes(err.message)
+        ? err.message
+        : 'Wrong PIN, or relays unreachable.';
     }
   };
+}
+
+function renderNsec(firstRun = false) {
+  shell(`
+    <h1>Your nsec</h1>
+    <p class="muted">${
+      firstRun ? 'Save this now. ' : ''
+    }Your nsec plus your PIN is all you need to restore your URLs from a Nostr backup. Anyone with the nsec <em>and</em> PIN can read them.</p>
+    <textarea id="nsec" rows="3" readonly>${esc(vault.nsec)}</textarea>
+    <button class="primary" id="copy">Copy nsec</button>
+    <button class="link" id="done">${firstRun ? "I've saved it — continue" : 'Back'}</button>
+  `);
+  $('#copy').onclick = () => copy(vault.nsec, 'nsec copied');
+  $('#done').onclick = () => (firstRun ? render() : renderBackup());
 }
 
 function renderList(filter = '') {
@@ -250,17 +266,28 @@ function renderList(filter = '') {
 }
 
 function renderBackup() {
-  const msg = vault.backup();
   shell(`
     <h1>Backup</h1>
-    <p class="muted">This single message holds all your URLs, encrypted with your PIN (Nostr NIP-44). Store it anywhere — it is useless without the PIN.</p>
-    <textarea id="msg" rows="6" readonly>${esc(msg)}</textarea>
-    <button class="primary" id="copy">Copy backup</button>
+    <p class="muted">Publishes your URLs to Nostr relays as one encrypted message, locked with both your nsec and your PIN. To restore anywhere you only need the nsec and PIN. Relays see only your public key and ciphertext.</p>
+    <button class="primary" id="push">Back up to Nostr now</button>
+    <p class="muted" id="status"></p>
+    <button class="ghost wide" id="nsecBtn">Show my nsec</button>
     <button class="ghost wide" id="plain">Copy URLs as plain text (unencrypted)</button>
-    <button class="ghost wide" id="restore">Restore from a backup…</button>
+    <button class="ghost wide" id="restore">Restore from Nostr…</button>
     <button class="link" id="back">Back</button>
   `);
-  $('#copy').onclick = () => copy(msg, 'Backup copied');
+  $('#push').onclick = async (e) => {
+    e.target.disabled = true;
+    $('#status').textContent = 'Publishing…';
+    try {
+      const { ok, total } = await vault.backupToNostr();
+      $('#status').textContent = ok ? `Backed up to ${ok} of ${total} relays.` : 'No relay accepted the backup. Check your connection and retry.';
+    } catch {
+      $('#status').textContent = 'Backup failed. Check your connection and retry.';
+    }
+    e.target.disabled = false;
+  };
+  $('#nsecBtn').onclick = () => renderNsec(false);
   $('#plain').onclick = () => copy(vault.items.map((i) => i.url).join('\n'), 'URLs copied');
   $('#restore').onclick = renderRestore;
   $('#back').onclick = render;
