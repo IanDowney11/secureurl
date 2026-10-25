@@ -1,0 +1,273 @@
+import './style.css';
+import { Vault, hasVault, wipe, MIN_PIN_LENGTH } from './vault.js';
+
+const app = document.getElementById('app');
+const IDLE_MS = 2 * 60 * 1000;
+const FAIL_KEY = 'secureurl.fails';
+
+let vault = null;
+let idleTimer = null;
+let toastTimer = null;
+
+const esc = (s) =>
+  s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+const $ = (sel) => app.querySelector(sel);
+
+function toast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+async function copy(text, msg = 'Copied') {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(msg);
+  } catch {
+    toast('Copy failed — long-press to copy');
+  }
+}
+
+// ---- failed-attempt throttling -------------------------------------------
+function failState() {
+  try {
+    return JSON.parse(localStorage.getItem(FAIL_KEY)) || { n: 0, until: 0 };
+  } catch {
+    return { n: 0, until: 0 };
+  }
+}
+function recordFail() {
+  const s = failState();
+  s.n += 1;
+  s.until = s.n >= 3 ? Date.now() + Math.min(2 ** (s.n - 3), 600) * 1000 : 0;
+  localStorage.setItem(FAIL_KEY, JSON.stringify(s));
+  return s;
+}
+const clearFails = () => localStorage.removeItem(FAIL_KEY);
+
+// ---- auto lock ------------------------------------------------------------
+function lock() {
+  vault = null;
+  clearTimeout(idleTimer);
+  render();
+}
+function bumpIdle() {
+  if (!vault) return;
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(lock, IDLE_MS);
+}
+['pointerdown', 'keydown', 'scroll'].forEach((ev) => addEventListener(ev, bumpIdle, { passive: true }));
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && vault) lock();
+});
+
+// ---- views ----------------------------------------------------------------
+function render() {
+  if (vault) return renderList();
+  return hasVault() ? renderLock() : renderSetup();
+}
+
+function shell(inner) {
+  app.innerHTML = `<main class="card">${inner}</main>`;
+}
+
+function renderSetup() {
+  shell(`
+    <div class="logo">🔐</div>
+    <h1>SecureURL</h1>
+    <p class="muted">Choose a PIN. It encrypts everything on this device — there is no way to recover it, so keep a backup.</p>
+    <form id="f" autocomplete="off">
+      <input id="p1" type="password" inputmode="numeric" placeholder="New PIN (${MIN_PIN_LENGTH}+ digits)" autocomplete="new-password" />
+      <input id="p2" type="password" inputmode="numeric" placeholder="Confirm PIN" autocomplete="new-password" />
+      <button class="primary" type="submit">Create vault</button>
+      <p class="error" id="err"></p>
+    </form>
+    <button class="link" id="restore">Restore from backup</button>
+  `);
+  $('#f').onsubmit = async (e) => {
+    e.preventDefault();
+    const p1 = $('#p1').value;
+    const p2 = $('#p2').value;
+    if (!/^\d+$/.test(p1) || p1.length < MIN_PIN_LENGTH) return ($('#err').textContent = `PIN must be at least ${MIN_PIN_LENGTH} digits.`);
+    if (p1 !== p2) return ($('#err').textContent = 'PINs do not match.');
+    $('#err').textContent = 'Creating…';
+    vault = await Vault.create(p1);
+    bumpIdle();
+    render();
+  };
+  $('#restore').onclick = renderRestore;
+}
+
+function renderLock() {
+  shell(`
+    <div class="logo">🔒</div>
+    <h1>SecureURL</h1>
+    <form id="f" autocomplete="off">
+      <input id="pin" type="password" inputmode="numeric" placeholder="Enter PIN" autocomplete="current-password" autofocus />
+      <button class="primary" type="submit">Unlock</button>
+      <p class="error" id="err"></p>
+    </form>
+    <button class="link" id="restore">Restore from backup</button>
+  `);
+  $('#f').onsubmit = async (e) => {
+    e.preventDefault();
+    const wait = failState().until - Date.now();
+    if (wait > 0) return ($('#err').textContent = `Too many attempts. Wait ${Math.ceil(wait / 1000)}s.`);
+    $('#err').textContent = 'Unlocking…';
+    try {
+      vault = await Vault.unlock($('#pin').value);
+      clearFails();
+      bumpIdle();
+      render();
+    } catch {
+      const s = recordFail();
+      $('#err').textContent = s.until ? 'Wrong PIN. Please wait before retrying.' : 'Wrong PIN.';
+      $('#pin').value = '';
+    }
+  };
+  $('#restore').onclick = renderRestore;
+}
+
+function renderRestore() {
+  const replacing = hasVault() || vault;
+  shell(`
+    <h1>Restore backup</h1>
+    <p class="muted">Paste your encrypted backup message and the PIN it was made with.${
+      replacing ? ' <strong>This replaces the data on this device.</strong>' : ''
+    }</p>
+    <form id="f" autocomplete="off">
+      <textarea id="msg" rows="5" placeholder="SECUREURL1.…"></textarea>
+      <input id="pin" type="password" inputmode="numeric" placeholder="Backup PIN" autocomplete="off" />
+      <button class="primary" type="submit">Restore</button>
+      <p class="error" id="err"></p>
+    </form>
+    <button class="link" id="back">Cancel</button>
+  `);
+  $('#back').onclick = render;
+  $('#f').onsubmit = async (e) => {
+    e.preventDefault();
+    $('#err').textContent = 'Decrypting…';
+    try {
+      vault = await Vault.restore($('#msg').value, $('#pin').value);
+      clearFails();
+      bumpIdle();
+      render();
+      toast(`Restored ${vault.items.length} URL${vault.items.length === 1 ? '' : 's'}`);
+    } catch (err) {
+      $('#err').textContent = err.message === 'Not a SecureURL backup' ? err.message : 'Wrong PIN or damaged backup.';
+    }
+  };
+}
+
+function renderList(filter = '') {
+  const q = filter.trim().toLowerCase();
+  const items = vault.items.filter((i) => !q || i.url.toLowerCase().includes(q) || (i.note || '').toLowerCase().includes(q));
+  app.innerHTML = `
+    <main class="wrap">
+      <header>
+        <h1>SecureURL</h1>
+        <div class="row">
+          <button class="ghost" id="settings">Backup</button>
+          <button class="ghost" id="lock">Lock</button>
+        </div>
+      </header>
+      <form id="add" class="card">
+        <textarea id="urls" rows="2" placeholder="Paste one or more URLs…"></textarea>
+        <input id="note" placeholder="Note (optional)" />
+        <button class="primary" type="submit">Save</button>
+      </form>
+      <input id="search" class="search" type="search" placeholder="Search ${vault.items.length} saved" value="${esc(filter)}" />
+      <ul class="list">
+        ${
+          items.length
+            ? items
+                .map(
+                  (i) => `<li>
+            <a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.url)}</a>
+            ${i.note ? `<div class="note">${esc(i.note)}</div>` : ''}
+            <div class="meta">${new Date(i.added).toLocaleDateString()}
+              <button class="mini" data-copy="${i.id}">Copy</button>
+              <button class="mini danger" data-del="${i.id}">Delete</button>
+            </div>
+          </li>`
+                )
+                .join('')
+            : `<li class="empty">${vault.items.length ? 'No matches.' : 'Nothing saved yet.'}</li>`
+        }
+      </ul>
+    </main>`;
+
+  $('#lock').onclick = lock;
+  $('#settings').onclick = renderBackup;
+  $('#search').oninput = (e) => {
+    renderList(e.target.value);
+    const s = $('#search');
+    s.focus();
+    s.setSelectionRange(s.value.length, s.value.length);
+  };
+  $('#add').onsubmit = (e) => {
+    e.preventDefault();
+    const found = $('#urls').value.split(/\s+/).filter(Boolean);
+    const note = $('#note').value.trim();
+    let added = 0;
+    for (const raw of found) {
+      let url;
+      try {
+        const u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`);
+        if (!/^https?:$/.test(u.protocol)) continue;
+        url = u.href;
+      } catch {
+        continue;
+      }
+      if (vault.items.some((i) => i.url === url)) continue;
+      vault.items.unshift({ id: crypto.randomUUID(), url, note, added: Date.now() });
+      added++;
+    }
+    if (!added) return toast('No new valid URLs found');
+    vault.save();
+    renderList(filter);
+    toast(`Saved ${added}`);
+  };
+  app.querySelectorAll('[data-copy]').forEach(
+    (b) => (b.onclick = () => copy(vault.items.find((i) => i.id === b.dataset.copy).url))
+  );
+  app.querySelectorAll('[data-del]').forEach(
+    (b) =>
+      (b.onclick = () => {
+        vault.items = vault.items.filter((i) => i.id !== b.dataset.del);
+        vault.save();
+        renderList(filter);
+      })
+  );
+}
+
+function renderBackup() {
+  const msg = vault.backup();
+  shell(`
+    <h1>Backup</h1>
+    <p class="muted">This single message holds all your URLs, encrypted with your PIN (Nostr NIP-44). Store it anywhere — it is useless without the PIN.</p>
+    <textarea id="msg" rows="6" readonly>${esc(msg)}</textarea>
+    <button class="primary" id="copy">Copy backup</button>
+    <button class="ghost wide" id="plain">Copy URLs as plain text (unencrypted)</button>
+    <button class="ghost wide" id="restore">Restore from a backup…</button>
+    <button class="link" id="back">Back</button>
+  `);
+  $('#copy').onclick = () => copy(msg, 'Backup copied');
+  $('#plain').onclick = () => copy(vault.items.map((i) => i.url).join('\n'), 'URLs copied');
+  $('#restore').onclick = renderRestore;
+  $('#back').onclick = render;
+}
+
+render();
+
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}

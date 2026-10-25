@@ -1,0 +1,14 @@
+﻿{
+  "name": "SecureURL",
+  "short_name": "SecureURL",
+  "description": "Save URLs privately. Encrypted on-device with Nostr NIP-44.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "192x192 512x512", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "192x192 512x512", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
