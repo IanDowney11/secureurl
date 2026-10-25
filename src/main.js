@@ -1,8 +1,8 @@
 import './style.css';
-import { Vault, hasVault, MIN_PIN_LENGTH } from './vault.js';
+import { Vault, hasVault, wipe, MIN_PIN_LENGTH, MAX_FAILED_ATTEMPTS } from './vault.js';
 
 const app = document.getElementById('app');
-const IDLE_MS = 2 * 60 * 1000;
+const IDLE_MS = 30 * 1000;
 const FAIL_KEY = 'secureurl.fails';
 
 let vault = null;
@@ -83,7 +83,7 @@ function renderSetup() {
   shell(`
     <div class="logo">🔐</div>
     <h1>SecureURL</h1>
-    <p class="muted">Choose a PIN. It encrypts everything on this device — there is no way to recover it, so keep a backup.</p>
+    <p class="muted">Choose a PIN (digits only). It encrypts everything on this device — there is no way to recover it, so keep a backup.</p>
     <form id="f" autocomplete="off">
       <input id="p1" type="password" inputmode="numeric" placeholder="New PIN (${MIN_PIN_LENGTH}+ digits)" autocomplete="new-password" />
       <input id="p2" type="password" inputmode="numeric" placeholder="Confirm PIN" autocomplete="new-password" />
@@ -129,7 +129,16 @@ function renderLock() {
       render();
     } catch {
       const s = recordFail();
-      $('#err').textContent = s.until ? 'Wrong PIN. Please wait before retrying.' : 'Wrong PIN.';
+      if (s.n >= MAX_FAILED_ATTEMPTS) {
+        wipe();
+        clearFails();
+        render();
+        return toast('Too many wrong PINs — local data erased. Restore from Nostr.');
+      }
+      const left = MAX_FAILED_ATTEMPTS - s.n;
+      $('#err').textContent =
+        (s.until ? 'Wrong PIN. Please wait before retrying.' : 'Wrong PIN.') +
+        (s.n >= 3 ? ` Data is erased after ${left} more wrong attempt${left === 1 ? '' : 's'}.` : '');
       $('#pin').value = '';
     }
   };
@@ -196,12 +205,12 @@ function renderList(filter = '') {
         </div>
       </header>
       <form id="add" class="card">
-        <textarea id="urls" rows="2" placeholder="Paste one or more URLs…"></textarea>
+        <textarea id="urls" rows="2" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Paste one or more URLs…"></textarea>
         <button class="ghost wide" type="button" id="paste">Paste from clipboard</button>
-        <input id="note" placeholder="Note (optional)" />
+        <input id="note" placeholder="Note (optional)" autocomplete="off" autocorrect="off" spellcheck="false" />
         <button class="primary" type="submit">Save</button>
       </form>
-      <input id="search" class="search" type="search" placeholder="Search ${vault.items.length} saved" value="${esc(filter)}" />
+      <input id="search" class="search" type="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Search ${vault.items.length} saved" value="${esc(filter)}" />
       <ul class="list">
         ${
           items.length
